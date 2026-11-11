@@ -15,9 +15,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialogButtonBox, QPushButton
 
 from umbratlas.core import Store, available, pending_reviews, validate_roadmap
-from umbratlas.provider import OpenAI
+from umbratlas.provider import GHOSTMODEL_URL, OPENAI_URL, Provider, base_url
 from umbratlas.samples import SAMPLES
-from umbratlas.ui import MainWindow, STYLE
+from umbratlas.ui import ConnectionDialog, MainWindow, STYLE
 
 
 class RoadmapTest(unittest.TestCase):
@@ -63,11 +63,34 @@ class ProviderTest(unittest.TestCase):
     def test_structured_output_and_billing_account(self):
         content = {"type": "output_text", "text": json.dumps({"questions": ["Опыт?", "Цель?", "Время?"]})}
         with self.simulate(content) as opener:
-            self.assertEqual(OpenAI("dummy").interview("C++")[0], "Опыт?")
+            self.assertEqual(Provider("dummy").interview("C++")[0], "Опыт?")
         request = opener.return_value.open.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), "Bearer dummy")
         self.assertFalse(json.loads(request.data)["store"])
         self.assertEqual(json.loads(request.data)["text"]["format"]["type"], "json_schema")
+
+    def test_ghostmodel_catalog_and_chat_use_the_provider_key(self):
+        provider = Provider("ghost-test", "vendor/selected", url=GHOSTMODEL_URL, protocol="chat")
+        result = {"data": [{"id": "vendor/selected"}, {"id": "vendor/selected"}, {"id": "other"}]}
+        with patch("umbratlas.provider.build_opener") as opener:
+            opener.return_value.open.return_value = io.BytesIO(json.dumps(result).encode())
+            self.assertEqual(provider.models(), ["other", "vendor/selected"])
+            request = opener.return_value.open.call_args.args[0]
+            self.assertEqual(request.full_url, GHOSTMODEL_URL + "/models")
+            self.assertEqual(request.get_method(), "GET")
+            self.assertEqual(request.get_header("Authorization"), "Bearer ghost-test")
+            response = {"choices": [{"message": {"content": '```json\n{"questions":["Опыт?","Цель?","Время?"]}\n```'}}]}
+            opener.return_value.open.return_value = io.BytesIO(json.dumps(response).encode())
+            self.assertEqual(len(provider.interview("C++")), 3)
+            request = opener.return_value.open.call_args.args[0]
+            self.assertEqual(request.full_url, GHOSTMODEL_URL + "/chat/completions")
+            self.assertEqual(json.loads(request.data)["model"], "vendor/selected")
+
+    def test_custom_endpoint_normalizes_pasted_urls(self):
+        self.assertEqual(base_url("https://Example.com:443/api/v1/chat/completions/"), "https://example.com/api/v1")
+        for bad_url in ("http://example.com/v1", "https://user@example.com/v1", "https://example.com/v1?q=x"):
+            with self.subTest(url=bad_url), self.assertRaises(ValueError):
+                base_url(bad_url)
 
     def test_search_only_accepts_citations_from_the_tool(self):
         content = {
@@ -79,7 +102,7 @@ class ProviderTest(unittest.TestCase):
             ],
         }
         with self.simulate(content) as opener:
-            resources = OpenAI("dummy").resources("C++", SAMPLES["cpp"]["topics"][0], "Русский")
+            resources = Provider("dummy").resources("C++", SAMPLES["cpp"]["topics"][0], "Русский")
         self.assertEqual([resource["url"] for resource in resources], ["https://docs.example/cpp"])
         self.assertEqual(json.loads(opener.return_value.open.call_args.args[0].data)["tools"][0]["type"], "web_search")
 
@@ -138,6 +161,31 @@ class DesktopTest(unittest.TestCase):
             self.assertEqual(restored.count.text(), "Пройдено 1 из 4")
             self.assertEqual(restored.library.count(), 2)
             restored.close()
+
+    def test_switching_provider_and_host_keeps_keys_separate(self):
+        with TemporaryDirectory() as directory:
+            settings = QSettings(str(Path(directory) / "settings.ini"), QSettings.Format.IniFormat)
+            dialog = ConnectionDialog(None, settings, {("openai", OPENAI_URL): "openai-test"})
+            self.assertEqual(dialog.key.text(), "openai-test")
+            dialog.provider.setCurrentIndex(dialog.provider.findData("ghostmodel"))
+            self.assertEqual(dialog.address.text(), GHOSTMODEL_URL)
+            self.assertFalse(dialog.key.text())
+            dialog.key.setText("ghost-test")
+            dialog.model.setEditText("vendor/selected")
+            dialog.save()
+            self.assertEqual(settings.value("providers/ghostmodel/model"), "vendor/selected")
+            settings.sync()
+            self.assertNotIn("ghost-test", Path(settings.fileName()).read_text())
+            dialog.provider.setCurrentIndex(dialog.provider.findData("custom"))
+            dialog.address.setText("https://first.example/v1")
+            dialog.key.setText("custom-test")
+            dialog.address.setText("https://second.example/v1")
+            self.assertFalse(dialog.key.text())
+            dialog.address.setText("https://first.example/v1")
+            self.assertEqual(dialog.key.text(), "custom-test")
+            dialog.provider.setCurrentIndex(dialog.provider.findData("openai"))
+            self.assertEqual(dialog.key.text(), "openai-test")
+            dialog.close()
 
     def test_worker_delivers_results_on_main_thread(self):
         with TemporaryDirectory() as directory:
