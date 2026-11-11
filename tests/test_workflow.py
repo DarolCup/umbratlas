@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QDialogButtonBox, QPushBu
 from umbratlas.core import Store, available, pending_reviews, validate_roadmap
 from umbratlas.provider import GHOSTMODEL_URL, OPENAI_URL, Provider, base_url
 from umbratlas.samples import SAMPLES
-from umbratlas.ui import ConnectionDialog, MainWindow, STYLE
+from umbratlas.ui import ConnectionDialog, GoalDialog, InterviewDialog, MainWindow, STYLE
 
 
 class RoadmapTest(unittest.TestCase):
@@ -186,6 +186,105 @@ class DesktopTest(unittest.TestCase):
             dialog.provider.setCurrentIndex(dialog.provider.findData("openai"))
             self.assertEqual(dialog.key.text(), "openai-test")
             dialog.close()
+
+    def wait_for_request(self, window):
+        for _ in range(100):
+            if window.job is None:
+                return
+            QTest.qWait(20)
+        self.fail("The desktop request did not finish")
+
+    def test_provider_workflow_recovers_draft_and_preserves_progress(self):
+        with TemporaryDirectory() as directory:
+            db = Store(Path(directory) / "learning.sqlite3")
+            settings = QSettings(str(Path(directory) / "settings.ini"), QSettings.Format.IniFormat)
+            settings.setValue("provider", "ghostmodel")
+            settings.setValue("providers/ghostmodel/model", "chat-model")
+            settings.setValue("providers/ghostmodel/search_model", "search-model")
+            questions = ["Какая цель?", "Есть опыт?", "Сколько времени?"]
+
+            def open_window():
+                window = MainWindow(db, settings)
+                window.keys["ghostmodel", GHOSTMODEL_URL] = "fixture"
+                window.show()
+                return window
+
+            def goal(dialog):
+                dialog.goal.setPlainText("C++ после паузы")
+                return True
+
+            def fill_interview(dialog):
+                dialog.editors[0].setPlainText("Хочу писать программы")
+                return True
+
+            def resume_interview(dialog):
+                self.assertEqual(dialog.editors[0].toPlainText(), "Хочу писать программы")
+                return True
+
+            def answer(text):
+                return io.BytesIO(json.dumps({"choices": [{"message": {"content": text}}]}).encode())
+
+            window = open_window()
+            with patch("umbratlas.provider.build_opener") as opener, patch.object(
+                GoalDialog, "exec", new=goal
+            ), patch.object(InterviewDialog, "exec", new=fill_interview), patch.object(
+                window, "show_error"
+            ) as errors:
+                opener.return_value.open.side_effect = [
+                    answer("Пожалуйста, ответь.\\n" + json.dumps({"questions": questions})),
+                    TimeoutError(),
+                ]
+                window.new_map()
+                self.wait_for_request(window)
+                self.assertIn("мог уже использовать токены", errors.call_args.args[0])
+                self.assertEqual(db.interview_draft(), ["C++ после паузы", questions, ["Хочу писать программы", "", ""]])
+            window.close()
+
+            window = open_window()
+            sources = {"status": "completed", "output": [{"type": "message", "content": [
+                {"type": "output_text", "text": "Материалы", "annotations": [
+                    {"type": "url_citation", "url": "https://learning.example/cpp", "title": "Учебник"}
+                ]}
+            ]}]}
+            with patch("umbratlas.provider.build_opener") as opener, patch.object(
+                InterviewDialog, "exec", new=resume_interview
+            ):
+                opener.return_value.open.side_effect = [
+                    answer(json.dumps(SAMPLES["cpp"])),
+                    io.BytesIO(json.dumps(sources).encode()),
+                    answer('{"passed":false,"feedback":"Покажи оба результата."}'),
+                    answer('{"passed":true,"feedback":"Оба результата верны."}'),
+                ]
+                window.resume_interview.click()
+                self.wait_for_request(window)
+                self.assertIsNone(db.interview_draft())
+                self.assertEqual(window.count.text(), "Пройдено 0 из 4")
+
+                self.assertFalse(window.search_button.isHidden())
+                window.search_button.click()
+                self.wait_for_request(window)
+                self.assertEqual(window.resource_list.item(0).text(), "Учебник")
+                request = opener.return_value.open.call_args.args[0]
+                self.assertTrue(request.full_url.endswith("/responses"))
+                self.assertEqual(json.loads(request.data)["model"], "search-model")
+
+                window.tabs.setCurrentIndex(1)
+                window.answer.setPlainText("Есть результат 100.")
+                window.ai_check.click()
+                self.wait_for_request(window)
+                self.assertEqual(window.count.text(), "Пройдено 0 из 4")
+                self.assertIn("Покажи оба", window.feedback.text())
+                window.answer.setPlainText("Получилось 100 и 0.")
+                window.ai_check.click()
+                self.wait_for_request(window)
+                self.assertEqual(window.count.text(), "Пройдено 1 из 4")
+                self.assertTrue(available(window.roadmap["topics"][1], window.progress))
+                self.assertTrue(window.progress[1]["review_at"])
+            window.close()
+            restored = open_window()
+            self.assertEqual(restored.resource_list.item(0).text(), "Учебник")
+            self.assertEqual(restored.count.text(), "Пройдено 1 из 4")
+            restored.close()
 
     def test_worker_delivers_results_on_main_thread(self):
         with TemporaryDirectory() as directory:

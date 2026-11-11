@@ -112,6 +112,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS roadmaps (
                     id INTEGER PRIMARY KEY, body TEXT NOT NULL, sample TEXT UNIQUE
                 );
+                CREATE TABLE IF NOT EXISTS interview_draft (
+                    id INTEGER PRIMARY KEY CHECK(id = 1), body TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS topic_state (
                     roadmap_id INTEGER NOT NULL REFERENCES roadmaps(id) ON DELETE CASCADE,
                     topic_id INTEGER NOT NULL,
@@ -135,13 +138,28 @@ class Store:
             with db:
                 yield db
 
-    def add(self, roadmap, sample=None):
+    def add(self, roadmap, sample=None, *, finish_interview=False):
         body = json.dumps(validate_roadmap(roadmap), ensure_ascii=False)
         with self.connection() as db:
             if sample:
                 db.execute("INSERT OR IGNORE INTO roadmaps(body, sample) VALUES (?, ?)", (body, sample))
                 return db.execute("SELECT id FROM roadmaps WHERE sample = ?", (sample,)).fetchone()[0]
-            return db.execute("INSERT INTO roadmaps(body) VALUES (?)", (body,)).lastrowid
+            identifier = db.execute("INSERT INTO roadmaps(body) VALUES (?)", (body,)).lastrowid
+            if finish_interview:
+                db.execute("DELETE FROM interview_draft WHERE id = 1")
+            return identifier
+
+    def interview_draft(self):
+        with self.connection() as db:
+            row = db.execute("SELECT body FROM interview_draft WHERE id = 1").fetchone()
+            return json.loads(row["body"]) if row else None
+
+    def save_interview(self, goal, questions=None, answers=None):
+        with self.connection() as db:
+            db.execute("""
+                INSERT INTO interview_draft(id, body) VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET body = excluded.body
+            """, (json.dumps([goal, questions, answers], ensure_ascii=False),))
 
     def all(self):
         with self.connection() as db:

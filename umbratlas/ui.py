@@ -150,6 +150,11 @@ class ConnectionDialog(QDialog):
         models = QHBoxLayout()
         models.addWidget(self.model, 1)
         models.addWidget(self.fetch_button)
+        self.search_model = QLineEdit()
+        self.search_model.setPlaceholderText("ID модели с Responses API и веб-поиском")
+        self.search_model.setMaxLength(240)
+        self.test_button = button("Проверить модель", self.test_model)
+        self.test_button.setToolTip("Выполняет короткий запрос с твоим API-ключом")
         self.language = QLineEdit(settings.value("language", "Русский", str))
         self.language.setMaxLength(100)
         self.message = label(style="muted")
@@ -158,7 +163,9 @@ class ConnectionDialog(QDialog):
         form.addRow("Протокол", self.protocol)
         form.addRow("API-ключ", self.key)
         form.addRow("Модель", models)
+        form.addRow("Модель для поиска", self.search_model)
         form.addRow("Язык материалов", self.language)
+        form.addRow(self.test_button)
         form.addRow(label("Ключ действует до закрытия приложения и отправляется на указанный адрес API.", "muted"))
         form.addRow(self.message)
         self.actions = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -177,15 +184,17 @@ class ConnectionDialog(QDialog):
     def change_provider(self):
         if self.active_provider is not None:
             self.saved[self.active_provider] = (
-                self.address.text(), self.protocol.currentData(), self.model.currentText().strip()
+                self.address.text(), self.protocol.currentData(), self.model.currentText().strip(),
+                self.search_model.text().strip(),
             )
         identifier = self.provider.currentData()
         default_model = self.settings.value("model", DEFAULT_MODEL, str) if identifier == "openai" else ""
         default_protocol = "responses" if identifier == "openai" else "chat"
-        address, protocol, model = self.saved.get(identifier, (
+        address, protocol, model, search_model = self.saved.get(identifier, (
             self.settings.value(f"providers/{identifier}/address", "", str),
             self.settings.value(f"providers/{identifier}/protocol", default_protocol, str),
             self.settings.value(f"providers/{identifier}/model", default_model, str),
+            self.settings.value(f"providers/{identifier}/search_model", "", str),
         ))
         self.active_provider = identifier
         self.address.setReadOnly(identifier in PRESETS)
@@ -198,6 +207,7 @@ class ConnectionDialog(QDialog):
         self.change_address()
         self.model.clear()
         self.model.setEditText(model)
+        self.search_model.setText(search_model)
 
     def change_address(self):
         try:
@@ -207,6 +217,7 @@ class ConnectionDialog(QDialog):
         scope = (self.active_provider, address) if address else None
         if scope != self.active_address:
             self.model.clear()
+            self.search_model.clear()
         self.active_address = scope
         self.key.blockSignals(True)
         self.key.setText(self.keys.get(self.active_address, ""))
@@ -238,32 +249,70 @@ class ConnectionDialog(QDialog):
         self.settings.setValue(f"providers/{identifier}/address", address)
         self.settings.setValue(f"providers/{identifier}/protocol", self.protocol.currentData())
         self.settings.setValue(f"providers/{identifier}/model", model or DEFAULT_MODEL)
+        self.settings.setValue(f"providers/{identifier}/search_model", self.search_model.text().strip())
         self.settings.setValue("language", self.language.text().strip() or "Русский")
         self.keys[(identifier, address)] = key
         self.accept()
 
+    def connect_api(self, *, require_model=False):
+        address = base_url(self.address.text())
+        key = self.validate_key()
+        if not key:
+            raise ValueError("Сначала введи API-ключ провайдера.")
+        model = self.model.currentText().strip()
+        if require_model and not model and self.provider.currentData() != "openai":
+            raise ValueError("Укажи ID модели или выбери модель из каталога.")
+        return Provider(key, model or DEFAULT_MODEL, url=address, protocol=self.protocol.currentData())
+
     def load_models(self):
         try:
-            address = base_url(self.address.text())
-            key = self.validate_key()
-            if not key:
-                raise ValueError("Сначала введи API-ключ провайдера.")
+            api = self.connect_api()
         except ValueError as error:
             self.message.setText(str(error))
             return
-        self.message.setText("Загружаем модели…")
+        self.run_check("Загружаем модели…", api.models, self.models_loaded, self.models_failed)
+
+    def test_model(self):
+        try:
+            api = self.connect_api(require_model=True)
+        except ValueError as error:
+            self.message.setText(str(error))
+            return
+        self.run_check(
+            "Проверяем модель коротким запросом…",
+            partial(api.interview, "Научиться планировать учёбу на неделю"),
+            self.model_tested, self.model_test_failed,
+        )
+
+    def run_check(self, message, operation, success, failure):
+        self.message.setText(message)
         self.set_loading(True)
-        self.fetch_task = Task(Provider(key, url=address).models)
-        self.fetch_task.signals.success.connect(self.models_loaded)
-        self.fetch_task.signals.failure.connect(self.models_failed)
+        self.fetch_task = Task(operation)
+        self.fetch_task.signals.success.connect(success)
+        self.fetch_task.signals.failure.connect(failure)
         QThreadPool.globalInstance().start(self.fetch_task)
 
     def set_loading(self, loading):
         self.provider.setEnabled(not loading)
         self.address.setEnabled(not loading)
         self.key.setEnabled(not loading)
+        self.model.setEnabled(not loading)
+        self.protocol.setEnabled(not loading and self.provider.currentData() != "openai")
         self.fetch_button.setEnabled(not loading)
+        self.test_button.setEnabled(not loading)
         self.actions.button(QDialogButtonBox.StandardButton.Save).setEnabled(not loading)
+
+    @Slot(object)
+    def model_tested(self, questions):
+        self.fetch_task = None
+        self.set_loading(False)
+        self.message.setText("Модель ответила на проверку. Можно сохранить настройки.")
+
+    @Slot(str)
+    def model_test_failed(self, error):
+        self.fetch_task = None
+        self.set_loading(False)
+        self.message.setText(error)
 
     @Slot(object)
     def models_loaded(self, models):
@@ -287,13 +336,13 @@ class ConnectionDialog(QDialog):
 
 
 class GoalDialog(QDialog):
-    def __init__(self, parent):
+    def __init__(self, parent, goal=""):
         super().__init__(parent)
         self.setWindowTitle("Новая карта")
         self.setMinimumWidth(520)
         layout = QVBoxLayout(self)
         layout.addWidget(label("Чему хочешь научиться?", "heading"))
-        self.goal = QPlainTextEdit()
+        self.goal = QPlainTextEdit(goal)
         self.goal.setPlaceholderText("Например, хочу вернуться к C++ и написать консольное приложение.")
         self.goal.setFixedHeight(100)
         layout.addWidget(self.goal)
@@ -353,7 +402,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.store = store
         self.settings = settings if settings is not None else QSettings()
-        self.keys = {("openai", OPENAI_URL): os.environ.get("OPENAI_API_KEY", "").strip()}
+        self.keys = {
+            ("openai", OPENAI_URL): os.environ.get("OPENAI_API_KEY", "").strip(),
+            ("ghostmodel", GHOSTMODEL_URL): os.environ.get("GHOSTMODEL_API_KEY", "").strip(),
+        }
         self.load_connection()
         self.pool = QThreadPool(self)
         self.job = None
@@ -363,7 +415,7 @@ class MainWindow(QMainWindow):
         self.selected_id = None
         self.progress = {}
         self.drafts = {}
-        self.interview_draft = None
+        self.interview_draft = self.store.interview_draft()
         self.setWindowTitle(f"Umbratlas {__version__}")
         self.setMinimumSize(880, 610)
         self.resize(1260, 800)
@@ -401,7 +453,7 @@ class MainWindow(QMainWindow):
         nav.setSpacing(11)
         nav.addWidget(button("＋  Новая карта", self.new_map, True))
         self.resume_interview = button("К диагностике", self.open_interview)
-        self.resume_interview.hide()
+        self.resume_interview.setVisible(self.interview_draft is not None)
         nav.addWidget(self.resume_interview)
         nav.addWidget(label("Мои карты", "section"))
         self.library = QListWidget()
@@ -519,7 +571,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.search_button)
         row.addWidget(self.link_button)
         layout.addLayout(row)
-        self.search_hint = label("Для автоматического поиска нужен Responses API с web_search.", "muted")
+        self.search_hint = label("Для подбора ссылок укажи модель для поиска в настройках ИИ.", "muted")
         layout.addWidget(self.search_hint)
         browser_search = QHBoxLayout()
         self.articles_button = button("Поиск статей ↗", partial(self.search_in_browser, False))
@@ -575,6 +627,7 @@ class MainWindow(QMainWindow):
         previous_model = self.settings.value("model", DEFAULT_MODEL, str) if self.provider_id == "openai" else ""
         self.model = self.settings.value(f"providers/{self.provider_id}/model", previous_model, str)
         self.language = self.settings.value("language", "Русский", str)
+        self.search_model = self.settings.value(f"providers/{self.provider_id}/search_model", "", str)
 
     def update_connection(self):
         status = "ключ задан" if self.keys.get((self.provider_id, self.endpoint)) else "без ключа"
@@ -738,9 +791,10 @@ class MainWindow(QMainWindow):
         self.no_resources.setVisible(not has_resources)
         self.link_button.setEnabled(has_resources)
         self.search_button.setText("Обновить поиск" if has_resources else "Найти материалы")
-        self.search_button.setVisible(self.protocol == "responses")
+        can_search = self.protocol == "responses" or bool(self.search_model)
+        self.search_button.setVisible(can_search)
         self.search_button.setEnabled(open_topic)
-        self.search_hint.setVisible(self.protocol != "responses")
+        self.search_hint.setVisible(not can_search)
         self.articles_button.setEnabled(open_topic)
         self.videos_button.setEnabled(open_topic)
         if has_resources:
@@ -752,7 +806,6 @@ class MainWindow(QMainWindow):
 
     def ready(self):
         if self.job is not None:
-            self.statusBar().showMessage("Дождись завершения текущего запроса.")
             return False
         return True
 
@@ -786,41 +839,54 @@ class MainWindow(QMainWindow):
 
     def show_error(self, message):
         self.statusBar().showMessage(message, 10000)
-        QMessageBox.warning(self, "Umbratlas", message)
+        dialog = QMessageBox(QMessageBox.Icon.Warning, "Umbratlas", message, QMessageBox.StandardButton.Ok, self)
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.exec()
+
+    def save_interview(self, goal, questions=None, answers=None):
+        try:
+            self.store.save_interview(goal, questions, answers)
+        except sqlite3.Error:
+            self.show_error("Не удалось сохранить черновик диагностики.")
+            return False
+        self.interview_draft = (goal, questions, answers)
+        self.resume_interview.show()
+        return True
 
     def new_map(self):
         if not self.ready():
             return
-        api = self.provider()
-        if api is None:
-            return
-        dialog = GoalDialog(self)
-        if dialog.exec():
-            goal = dialog.goal.toPlainText().strip()
-            self.run("ИИ готовит вопросы…", partial(api.interview, goal), partial(self.set_interview, goal))
+        previous = self.interview_draft[0] if self.interview_draft and self.interview_draft[1] is None else ""
+        dialog = GoalDialog(self, previous)
+        if dialog.exec() and self.save_interview(dialog.goal.toPlainText().strip()):
+            self.open_interview()
 
     def set_interview(self, goal, questions):
-        self.interview_draft = (goal, questions, None)
-        self.resume_interview.show()
-        self.open_interview()
+        if self.save_interview(goal, questions):
+            self.open_interview()
 
     def open_interview(self):
         if not self.ready() or not self.interview_draft:
             return
-        api = self.provider()
-        if api is None:
-            return
         goal, questions, answers = self.interview_draft
+        if questions is None:
+            api = self.provider()
+            if api is not None:
+                self.run("ИИ готовит вопросы…", partial(api.interview, goal), partial(self.set_interview, goal))
+            return
         dialog = InterviewDialog(self, questions, answers)
         accepted = dialog.exec()
         answers = dialog.answers()
-        self.interview_draft = (goal, questions, answers)
-        if accepted:
+        if not self.save_interview(goal, questions, answers) or not accepted:
+            return
+        api = self.provider()
+        if api is not None:
             interview = [{"question": q, "answer": a} for q, a in zip(questions, answers, strict=True)]
-            self.run("ИИ строит карту…", partial(api.roadmap, goal, interview), self.map_created)
+            self.run("ИИ строит карту. Это может занять несколько минут…",
+                     partial(api.roadmap, goal, interview), self.map_created)
 
     def map_created(self, roadmap):
-        identifier = self.store.add(roadmap)
+        identifier = self.store.add(roadmap, finish_interview=True)
         self.interview_draft = None
         self.resume_interview.hide()
         self.reload_library(identifier)
@@ -829,12 +895,15 @@ class MainWindow(QMainWindow):
         if not self.ready():
             return
         api = self.provider()
-        if api is not None and api.protocol == "responses":
-            self.run(
-                "Ищем материалы в интернете…",
-                partial(api.resources, self.roadmap["title"], self.topic, self.language),
-                partial(self.resources_found, self.roadmap_id, self.selected_id),
-            )
+        if api is None or (api.protocol != "responses" and not self.search_model):
+            return
+        if self.search_model:
+            api = Provider(api.key, self.search_model, url=api.url, protocol="responses")
+        self.run(
+            "Ищем материалы в интернете…",
+            partial(api.resources, self.roadmap["title"], self.topic, self.language),
+            partial(self.resources_found, self.roadmap_id, self.selected_id),
+        )
 
     def search_in_browser(self, video):
         query = f"{self.roadmap['title']} {self.topic['title']} {self.language}"

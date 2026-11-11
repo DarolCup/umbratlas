@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version=0.2.0
+version=0.2.1
 asset="umbratlas-${version}.tar.gz"
 release="https://github.com/DarolCup/umbratlas/releases/download/v${version}"
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
