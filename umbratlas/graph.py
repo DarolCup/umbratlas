@@ -79,6 +79,8 @@ class MapView(QGraphicsView):
                     status = "Пройдено"
                 else:
                     status = "Доступна" if available(topic, progress) else "Закрыта"
+                if topic.get("optional"):
+                    status += " · дополнительно"
                 card = TopicCard(topic, status, identifier == selected)
                 card.setPos(26 + col * (WIDTH + 24), y)
                 card.chosen.connect(self.chosen.emit)
@@ -104,3 +106,12 @@ class MapView(QGraphicsView):
             card.update()
         if scroll and identifier in self.cards:
             self.ensureVisible(self.cards[identifier], 32, 32)
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
+            if 0.4 <= self.transform().m11() * factor <= 2.5:
+                self.scale(factor, factor)
+            event.accept()
+        else:
+            super().wheelEvent(event)

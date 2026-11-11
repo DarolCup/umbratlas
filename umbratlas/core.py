@@ -46,7 +46,10 @@ def validate_roadmap(raw):
             prerequisites = topic["prerequisites"]
             if not isinstance(prerequisites, list) or any(type(p) is not int for p in prerequisites):
                 raise ValueError("Связи между темами должны ссылаться на идентификаторы тем.")
+            if type(topic.get("optional", False)) is not bool:
+                raise ValueError("Поле optional должно быть логическим.")
             result.append({
+                "optional": topic.get("optional", False),
                 "id": identifier,
                 "prerequisites": list(dict.fromkeys(prerequisites)),
                 "title": clean_text(topic["title"], 140),
@@ -58,6 +61,11 @@ def validate_roadmap(raw):
             })
         if any(set(t["prerequisites"]) - ids for t in result):
             raise ValueError("В карте есть ссылка на отсутствующую тему.")
+        optional_ids = {t["id"] for t in result if t["optional"]}
+        if all(t["optional"] for t in result):
+            raise ValueError("Нужна хотя бы одна обязательная тема.")
+        if any(set(t["prerequisites"]) & optional_ids for t in result if not t["optional"]):
+            raise ValueError("Обязательные темы не могут зависеть от необязательных.")
         roadmap = {"title": title, "summary": summary, "topics": result}
         stages(roadmap)
         return roadmap
@@ -109,6 +117,14 @@ class Store:
         self.path = path
         with self.connection() as db:
             db.executescript("""
+                CREATE TABLE IF NOT EXISTS activity (
+                    id INTEGER PRIMARY KEY CHECK(id = 1), last_seen TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS answer_drafts (
+                    roadmap_id INTEGER NOT NULL REFERENCES roadmaps(id) ON DELETE CASCADE,
+                    topic_id INTEGER NOT NULL, answer TEXT NOT NULL,
+                    PRIMARY KEY (roadmap_id, topic_id)
+                );
                 CREATE TABLE IF NOT EXISTS roadmaps (
                     id INTEGER PRIMARY KEY, body TEXT NOT NULL, sample TEXT UNIQUE
                 );
@@ -129,6 +145,24 @@ class Store:
                     answer TEXT NOT NULL, passed INTEGER NOT NULL, feedback TEXT NOT NULL
                 );
             """)
+
+    def visit(self, moment=None):
+        moment = moment or now()
+        with self.connection() as db:
+            row = db.execute("SELECT last_seen FROM activity WHERE id = 1").fetchone()
+            days = max(0, (moment - datetime.fromisoformat(row[0])).days) if row else 0
+            db.execute("INSERT INTO activity VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen",
+                       (moment.isoformat(),))
+            return days
+
+    def save_answer(self, roadmap_id, topic_id, answer):
+        with self.connection() as db:
+            db.execute("INSERT INTO answer_drafts VALUES (?, ?, ?) ON CONFLICT(roadmap_id, topic_id) DO UPDATE SET answer=excluded.answer",
+                       (roadmap_id, topic_id, answer))
+
+    def drafts(self):
+        with self.connection() as db:
+            return {(r[0], r[1]): r[2] for r in db.execute("SELECT * FROM answer_drafts")}
 
     @contextmanager
     def connection(self):

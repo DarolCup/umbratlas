@@ -132,7 +132,9 @@ class DesktopTest(unittest.TestCase):
             window.answer.setPlainText("Выполнил оба вызова. Получил 100 и 0.")
 
             def confirm_practice():
-                dialog = self.app.activeModalWidget()
+                dialog = window.active_page
+                self.assertIsNone(self.app.activeModalWidget())
+                self.assertFalse(dialog.isWindow())
                 dialog.findChild(QCheckBox).setChecked(True)
                 dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Save).click()
 
@@ -141,7 +143,9 @@ class DesktopTest(unittest.TestCase):
             self.assertEqual(window.count.text(), "Пройдено 1 из 4")
 
             def confirm_review():
-                dialog = self.app.activeModalWidget()
+                dialog = window.active_page
+                self.assertIsNone(self.app.activeModalWidget())
+                self.assertFalse(dialog.isWindow())
                 buttons = {b.text(): b for b in dialog.findChildren(QPushButton)}
                 self.assertFalse(buttons["Вспомнил"].isVisible())
                 buttons["Показать шпаргалку"].click()

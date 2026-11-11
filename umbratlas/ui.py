@@ -7,8 +7,8 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import urlencode
 
-from PySide6.QtCore import QObject, QRunnable, QSettings, QStandardPaths, QThreadPool, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import QEventLoop, QTimer, QObject, QRunnable, QSettings, QStandardPaths, QThreadPool, Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
-from .core import Store, available, pending_reviews, stages, web_url
+from .core import now, Store, available, pending_reviews, stages, web_url
 from .graph import MapView
 from .provider import ApiError, DEFAULT_MODEL, GHOSTMODEL_URL, OPENAI_URL, Provider, base_url
 from .samples import SAMPLES
@@ -117,7 +117,66 @@ class Task(QRunnable):
             self.signals.failure.emit("Не удалось обработать ответ. Повтори запрос.")
 
 
-class ConnectionDialog(QDialog):
+class EmbeddedPage(QDialog):
+    """A form hosted by the main stack; never creates a native dialog window."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.host = parent
+        self.loop = None
+        self.result_code = 0
+        self.setWindowFlags(Qt.WindowType.Widget)
+
+    def exec(self):
+        if self.host is None:
+            raise RuntimeError("An embedded page requires a main window")
+        host = self.host
+        previous = host.screen_stack.currentWidget()
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(40, 24, 40, 24)
+        layout.addWidget(button("← Вернуться", self.reject), alignment=Qt.AlignmentFlag.AlignLeft)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self)
+        layout.addWidget(scroll, 1)
+        self.page_error = label(style="accent")
+        layout.addWidget(self.page_error)
+        host.screen_stack.addWidget(container)
+        host.active_page = self
+        host.screen_stack.setCurrentWidget(container)
+        self.show()
+        self.loop = QEventLoop()
+        self.loop.exec()
+        host.screen_stack.setCurrentWidget(previous)
+        host.screen_stack.removeWidget(container)
+        host.active_page = None
+        self.setParent(host)
+        self.hide()
+        container.deleteLater()
+        return self.result_code
+
+    def done(self, result):
+        self.result_code = int(result)
+        if self.loop is not None:
+            self.loop.quit()
+
+    def accept(self):
+        self.done(1)
+
+    def reject(self):
+        if getattr(self, "fetch_task", None) is not None:
+            self.message.setText("Дождись завершения проверки подключения.")
+            return
+        self.done(0)
+
+    def notice(self, message):
+        if hasattr(self, "validation_message"):
+            self.validation_message.setText(message)
+        elif self.host:
+            self.host.statusBar().showMessage(message)
+
+
+class ConnectionDialog(EmbeddedPage):
     def __init__(self, parent, settings, keys):
         super().__init__(parent)
         self.setWindowTitle("Настройки ИИ")
@@ -335,7 +394,7 @@ class ConnectionDialog(QDialog):
         self.message.setText(f"{error} Можно ввести ID модели вручную.")
 
 
-class GoalDialog(QDialog):
+class GoalDialog(EmbeddedPage):
     def __init__(self, parent, goal=""):
         super().__init__(parent)
         self.setWindowTitle("Новая карта")
@@ -353,48 +412,71 @@ class GoalDialog(QDialog):
         self.actions.accepted.connect(self.validate)
         self.actions.rejected.connect(self.reject)
         layout.addWidget(self.actions)
+        self.validation_message = label(style="muted")
+        layout.addWidget(self.validation_message)
 
     def validate(self):
         if 3 <= len(self.goal.toPlainText().strip()) <= 1000:
             self.accept()
         else:
-            QMessageBox.information(self, "Цель", "Опиши цель текстом длиной от 3 до 1000 символов.")
+            self.notice("Опиши цель текстом длиной от 3 до 1000 символов.")
 
 
-class InterviewDialog(QDialog):
+class InterviewDialog(EmbeddedPage):
     def __init__(self, parent, questions, answers=None):
         super().__init__(parent)
         self.setWindowTitle("Стартовая диагностика")
-        self.resize(600, 600)
+        if not 1 <= len(questions) <= 17:
+            raise ValueError("Диагностика должна содержать не более 17 вопросов.")
         layout = QVBoxLayout(self)
-        layout.addWidget(label("Перед построением карты", "heading"))
-        scroll, form = scroll_panel()
+        layout.setSpacing(20)
+        layout.addWidget(label("Настроим маршрут под тебя", "hero"))
+        self.counter = label(style="accent")
+        layout.addWidget(self.counter)
+        self.steps = QStackedWidget()
         self.editors = []
         for index, question in enumerate(questions):
-            form.addWidget(label(question))
-            editor = QPlainTextEdit(answers[index] if answers else "")
-            editor.setPlaceholderText("Твой ответ")
-            editor.setFixedHeight(74)
+            page = QWidget()
+            form = QVBoxLayout(page)
+            form.addWidget(label(question, "heading"))
+            editor = QPlainTextEdit(answers[index] if answers and index < len(answers) else "")
+            editor.setPlaceholderText("Расскажи своими словами. Если не знаешь — так и напиши.")
+            editor.setMinimumHeight(150)
             form.addWidget(editor)
+            self.steps.addWidget(page)
             self.editors.append(editor)
-        form.addStretch()
-        layout.addWidget(scroll)
-        actions = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        actions.button(QDialogButtonBox.StandardButton.Ok).setText("Построить карту")
-        actions.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
-        actions.accepted.connect(self.validate)
-        actions.rejected.connect(self.reject)
-        layout.addWidget(actions)
+        layout.addWidget(self.steps, 1)
+        self.validation_message = label(style="muted")
+        layout.addWidget(self.validation_message)
+        row = QHBoxLayout()
+        self.back = button("Назад", lambda: self.move(-1))
+        self.forward = button("Дальше →", self.validate, True)
+        row.addWidget(self.back)
+        row.addStretch()
+        row.addWidget(self.forward)
+        layout.addLayout(row)
+        self.move(0)
 
     def answers(self):
         return [editor.toPlainText().strip() for editor in self.editors]
 
+    def move(self, delta):
+        index = self.steps.currentIndex() + delta
+        self.steps.setCurrentIndex(index)
+        self.counter.setText(f"ВОПРОС {index + 1} ИЗ {len(self.editors)}")
+        self.back.setEnabled(index > 0)
+        self.forward.setText("Построить карту" if index == len(self.editors) - 1 else "Дальше →")
+        self.validation_message.clear()
+
     def validate(self):
-        answers = self.answers()
-        if not any(answers) or any(len(answer) > 2400 for answer in answers):
-            QMessageBox.information(self, "Ответы", "Ответь хотя бы на один вопрос. Лимит — 2400 символов на ответ.")
+        answer = self.answers()[self.steps.currentIndex()]
+        if not 1 <= len(answer) <= 2400:
+            self.notice("Ответь на вопрос: от 1 до 2400 символов.")
             return
-        self.accept()
+        if self.steps.currentIndex() == len(self.editors) - 1:
+            self.accept()
+        else:
+            self.move(1)
 
 
 class MainWindow(QMainWindow):
@@ -414,20 +496,29 @@ class MainWindow(QMainWindow):
         self.roadmap_id = None
         self.selected_id = None
         self.progress = {}
-        self.drafts = {}
+        self.drafts = self.store.drafts()
+        self.active_page = None
+        self.absent_days = self.store.visit()
         self.interview_draft = self.store.interview_draft()
         self.setWindowTitle(f"Umbratlas {__version__}")
         self.setMinimumSize(880, 610)
         self.resize(1260, 800)
         self.build()
         self.reload_library(self.settings.value("active_roadmap", 0, int))
+        if self.absent_days >= 7 and self.roadmap_id:
+            QTimer.singleShot(0, self.welcome_back)
+        self.activity_timer = QTimer(self)
+        self.activity_timer.timeout.connect(self.store.visit)
+        self.activity_timer.start(60000)
 
     def build(self):
         shell = QWidget()
         root = QVBoxLayout(shell)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        self.setCentralWidget(shell)
+        self.screen_stack = QStackedWidget()
+        self.screen_stack.addWidget(shell)
+        self.setCentralWidget(self.screen_stack)
         top = QFrame(objectName="top")
         bar = QHBoxLayout(top)
         bar.setContentsMargins(19, 11, 20, 11)
@@ -440,6 +531,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.connection_status)
         bar.addWidget(button("Настройки ИИ", self.configure))
         root.addWidget(top)
+        self.error_banner = label(style="accent")
+        self.error_banner.setMargin(14)
+        self.error_banner.hide()
+        root.addWidget(self.error_banner)
 
         main = QHBoxLayout()
         main.setContentsMargins(0, 0, 0, 0)
@@ -553,7 +648,8 @@ class MainWindow(QMainWindow):
         details.addWidget(self.tabs)
         lesson, layout = scroll_panel()
         self.tabs.addTab(lesson, "Изучение")
-        self.lesson = block(layout, "Что изучить")
+        self.lesson = block(layout, "Теория")
+        layout.addWidget(button("Объяснить подробнее с ИИ", self.ask_teacher))
         layout.addSpacing(5)
         layout.addWidget(label("Материалы", "section"))
         self.resource_list = QListWidget()
@@ -574,8 +670,8 @@ class MainWindow(QMainWindow):
         self.search_hint = label("Для подбора ссылок укажи модель для поиска в настройках ИИ.", "muted")
         layout.addWidget(self.search_hint)
         browser_search = QHBoxLayout()
-        self.articles_button = button("Поиск статей ↗", partial(self.search_in_browser, False))
-        self.videos_button = button("Поиск видео ↗", partial(self.search_in_browser, True))
+        self.articles_button = button("Поиск статей", partial(self.search_in_browser, False))
+        self.videos_button = button("Поиск видео", partial(self.search_in_browser, True))
         browser_search.addWidget(self.articles_button)
         browser_search.addWidget(self.videos_button)
         layout.addLayout(browser_search)
@@ -713,7 +809,8 @@ class MainWindow(QMainWindow):
             self.select_topic(self.selected_id)
 
     def next_topic(self):
-        ordered = [topic for group in stages(self.roadmap) for topic in group]
+        ordered = sorted([topic for group in stages(self.roadmap) for topic in group],
+                         key=lambda topic: topic.get("optional", False))
         return next((
             topic for topic in ordered if available(topic, self.progress)
             and not self.progress.get(topic["id"], {}).get("completed_at")
@@ -764,7 +861,7 @@ class MainWindow(QMainWindow):
             names = [t["title"] for t in self.roadmap["topics"]
                      if t["id"] in topic["prerequisites"] and not self.progress.get(t["id"], {}).get("completed_at")]
             status = "Сначала пройди: " + ", ".join(names)
-        self.topic_status.setText(status)
+        self.topic_status.setText(("Дополнительно · " if topic.get("optional") else "") + status)
         self.topic_title.setText(topic["title"])
         self.lesson.setText(topic["lesson"])
         self.practice.setText(topic["practice"])
@@ -803,6 +900,7 @@ class MainWindow(QMainWindow):
     def save_draft(self):
         if self.selected_id is not None:
             self.drafts[self.roadmap_id, self.selected_id] = self.answer.toPlainText()
+            self.store.save_answer(self.roadmap_id, self.selected_id, self.answer.toPlainText())
 
     def ready(self):
         if self.job is not None:
@@ -816,6 +914,7 @@ class MainWindow(QMainWindow):
         self.on_result = callback
         self.job.signals.success.connect(self.succeeded)
         self.job.signals.failure.connect(self.failed)
+        self.error_banner.hide()
         self.statusBar().showMessage(status)
         self.pool.start(self.job)
 
@@ -839,9 +938,10 @@ class MainWindow(QMainWindow):
 
     def show_error(self, message):
         self.statusBar().showMessage(message, 10000)
-        dialog = QMessageBox(QMessageBox.Icon.Warning, "Umbratlas", message, QMessageBox.StandardButton.Ok, self)
-        dialog.setTextFormat(Qt.TextFormat.PlainText)
-        dialog.exec()
+        if self.active_page is not None and hasattr(self.active_page, "page_error"):
+            self.active_page.page_error.setText(message)
+        self.error_banner.setText(message)
+        self.error_banner.show()
 
     def save_interview(self, goal, questions=None, answers=None):
         try:
@@ -854,7 +954,7 @@ class MainWindow(QMainWindow):
         return True
 
     def new_map(self):
-        if not self.ready():
+        if self.active_page or not self.ready():
             return
         previous = self.interview_draft[0] if self.interview_draft and self.interview_draft[1] is None else ""
         dialog = GoalDialog(self, previous)
@@ -875,6 +975,8 @@ class MainWindow(QMainWindow):
                 self.run("ИИ готовит вопросы…", partial(api.interview, goal), partial(self.set_interview, goal))
             return
         dialog = InterviewDialog(self, questions, answers)
+        for editor in dialog.editors:
+            editor.textChanged.connect(lambda: self.save_interview(goal, questions, dialog.answers()))
         accepted = dialog.exec()
         answers = dialog.answers()
         if not self.save_interview(goal, questions, answers) or not accepted:
@@ -911,8 +1013,7 @@ class MainWindow(QMainWindow):
             url = "https://www.youtube.com/results?" + urlencode({"search_query": query})
         else:
             url = "https://www.google.com/search?" + urlencode({"q": query})
-        if not QDesktopServices.openUrl(QUrl(url)):
-            self.show_error("Не удалось открыть браузер.")
+        self.open_web(url)
 
     def resources_found(self, roadmap_id, topic_id, resources):
         self.store.save_resources(roadmap_id, topic_id, resources)
@@ -924,15 +1025,53 @@ class MainWindow(QMainWindow):
 
     def open_resource(self, item):
         if item and web_url(item.data(DATA)):
-            if not QDesktopServices.openUrl(QUrl(item.data(DATA))):
-                self.show_error("Не удалось открыть браузер. Скопируй адрес из подсказки к ссылке.")
+            self.open_web(item.data(DATA))
+
+    def open_web(self, url):
+        if not web_url(url):
+            return
+        try:
+            from PySide6.QtWebEngineWidgets import QWebEngineView
+            from PySide6.QtWebEngineCore import QWebEnginePage
+        except ImportError:
+            self.show_error("Для встроенных материалов нужен Qt WebEngine: установи python3-pyside6.")
+            return
+        page = EmbeddedPage(self)
+        layout = QVBoxLayout(page)
+        address = label(url, "muted")
+        address.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(address)
+        status = label(style="muted")
+        layout.addWidget(status)
+        class ContentPage(QWebEnginePage):
+            def javaScriptAlert(self, origin, message):
+                status.setText(message[:1000])
+            def javaScriptConfirm(self, origin, message):
+                return False
+            def javaScriptPrompt(self, origin, message, default):
+                return False, ""
+            def acceptNavigationRequest(self, target, navigation, main_frame):
+                return web_url(target.toString()) or target.toString() == "about:blank"
+        view = QWebEngineView()
+        view.setPage(ContentPage(view))
+        view.urlChanged.connect(lambda target: address.setText(target.toString()))
+        view.loadFinished.connect(lambda ok: status.setText("" if ok else "Сайт не загрузился. Можно скопировать адрес выше и открыть вручную."))
+        row = QHBoxLayout()
+        row.addWidget(button("← Назад по сайту", view.back))
+        row.addWidget(button("Обновить", view.reload))
+        layout.addLayout(row)
+        layout.addWidget(view, 1)
+        view.setUrl(QUrl(url))
+        page.exec()
+        view.stop()
+        view.deleteLater()
 
     def check_answer(self):
         if not self.ready():
             return
         answer = self.answer.toPlainText().strip()
         if not 1 <= len(answer) <= 12000:
-            QMessageBox.information(self, "Практика", "Опиши результат или вставь решение до 12 000 символов.")
+            self.show_error("Опиши результат или вставь решение до 12 000 символов.")
             return
         api = self.provider()
         if api is not None:
@@ -947,9 +1086,9 @@ class MainWindow(QMainWindow):
             return
         answer = self.answer.toPlainText().strip()
         if not 1 <= len(answer) <= 12000:
-            QMessageBox.information(self, "Практика", "Кратко запиши результат, прежде чем отметить практику.")
+            self.show_error("Кратко запиши результат, прежде чем отметить практику.")
             return
-        dialog = QDialog(self)
+        dialog = EmbeddedPage(self)
         dialog.setWindowTitle("Самопроверка")
         dialog.setMinimumWidth(430)
         layout = QVBoxLayout(dialog)
@@ -976,6 +1115,7 @@ class MainWindow(QMainWindow):
         self.store.attempt(roadmap_id, topic, answer, passed, feedback)
         if passed:
             self.drafts.pop((roadmap_id, topic["id"]), None)
+            self.store.save_answer(roadmap_id, topic["id"], "")
         if roadmap_id == self.roadmap_id:
             self.refresh()
         self.statusBar().showMessage("Тема завершена" if passed else "Обратная связь сохранена", 6000)
@@ -989,7 +1129,7 @@ class MainWindow(QMainWindow):
             self.review_selected()
 
     def review_selected(self):
-        dialog = QDialog(self)
+        dialog = EmbeddedPage(self)
         dialog.setWindowTitle("Повторение темы")
         dialog.setMinimumWidth(450)
         layout = QVBoxLayout(dialog)
@@ -1027,8 +1167,74 @@ class MainWindow(QMainWindow):
             except (sqlite3.Error, ValueError):
                 self.show_error("Не удалось сохранить повторение.")
 
+    def ask_teacher(self):
+        if not self.ready() or not available(self.topic, self.progress):
+            return
+        api = self.provider()
+        if api is None:
+            return
+        page = EmbeddedPage(self)
+        layout = QVBoxLayout(page)
+        layout.addWidget(label(self.topic["title"], "heading"))
+        question = QPlainTextEdit()
+        question.setPlaceholderText("Задай вопрос или попроси разобрать пример")
+        question.setMaximumHeight(130)
+        layout.addWidget(question)
+        response = QPlainTextEdit()
+        response.setReadOnly(True)
+        response.setPlainText(self.topic["lesson"])
+        layout.addWidget(response, 1)
+        topic = self.topic.copy()
+        goal = self.roadmap["title"]
+        history = []
+        def send():
+            text = question.toPlainText().strip() or "Объясни эту тему подробно, с примером и маленьким упражнением."
+            if not self.ready() or len(text) > 6000:
+                return
+            def received(answer):
+                history.extend([{"role": "user", "text": text}, {"role": "teacher", "text": answer}])
+                response.appendPlainText("\nТы: " + text + "\n\nУчитель: " + answer)
+                question.clear()
+            self.run("Учитель готовит объяснение…", partial(api.teach, goal, topic, text, history[-8:]), received)
+        layout.addWidget(button("Спросить учителя", send, True))
+        page.exec()
+
+    def welcome_back(self):
+        if self.active_page or not self.roadmap_id:
+            return
+        page = EmbeddedPage(self)
+        layout = QVBoxLayout(page)
+        layout.addWidget(label("С возвращением", "hero"))
+        layout.addWidget(label(f"Перерыв: {self.absent_days} дн. Начнём с короткого повторения, а затем продолжим маршрут.", "muted"))
+        topic = next(iter(pending_reviews(self.roadmap, self.progress)), self.next_topic())
+        layout.addWidget(label(topic["recall"], "heading"))
+        answer = QPlainTextEdit()
+        answer.setPlaceholderText("Что ты помнишь? Можно ответить «не помню».")
+        layout.addWidget(answer)
+        feedback = label(style="accent")
+        layout.addWidget(feedback)
+        def assess():
+            if not answer.toPlainText().strip():
+                feedback.setText("Напиши, что удалось вспомнить.")
+                return
+            key = self.keys.get((self.provider_id, self.endpoint))
+            api = Provider(key, self.model, url=self.endpoint, protocol=self.protocol) if key else None
+            if api:
+                self.run("ИИ готовит план возвращения…", partial(api.return_plan,
+                    self.roadmap["title"], topic, answer.toPlainText()[:12000], self.absent_days),
+                    feedback.setText)
+            else:
+                feedback.setText(topic["cheatsheet"])
+        layout.addWidget(button("Получить план возвращения", assess, True))
+        layout.addWidget(button("Продолжить маршрут", page.accept))
+        page.exec()
+        self.continue_map()
+
     def closeEvent(self, event):
-        if self.job is not None:
+        if self.active_page is not None:
+            self.active_page.reject()
+            event.ignore()
+        elif self.job is not None:
             self.statusBar().showMessage("Запрос ещё выполняется. Окно можно свернуть до его завершения.")
             event.ignore()
         else:

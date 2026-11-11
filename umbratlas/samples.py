@@ -3,7 +3,7 @@
 
 def topic(identifier, prerequisites, title, lesson, practice, criteria, cheatsheet, recall):
     return {
-        "id": identifier, "prerequisites": prerequisites, "title": title, "lesson": lesson,
+        "id": identifier, "optional": False, "prerequisites": prerequisites, "title": title, "lesson": lesson,
         "practice": practice, "criteria": criteria, "cheatsheet": cheatsheet, "recall": recall,
     }
 

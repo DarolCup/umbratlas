@@ -36,7 +36,7 @@ def plain_questions(answer):
         match[1] for line in THINK.sub("", answer).splitlines()
         if (match := QUESTION_LINE.fullmatch(line))
     ]
-    return questions if 3 <= len(questions) <= 5 else []
+    return questions if 1 <= len(questions) <= 17 else []
 
 
 def text_parts(value):

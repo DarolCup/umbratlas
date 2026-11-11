@@ -8,6 +8,7 @@ from urllib.error import HTTPError, URLError
 
 from umbratlas.provider import ApiError, GHOSTMODEL_URL, OutputError, Provider
 from umbratlas.samples import SAMPLES
+from umbratlas.core import validate_roadmap
 
 
 def api_response(body):
@@ -84,7 +85,7 @@ class ProviderRecoveryTest(unittest.TestCase):
         with patch("umbratlas.provider.build_opener") as opener:
             opener.return_value.open.return_value = reply
             result = self.provider.roadmap("C++", [])
-            self.assertEqual(result, SAMPLES["cpp"])
+            self.assertEqual(result, validate_roadmap(SAMPLES["cpp"]))
             request = opener.return_value.open.call_args
             self.assertTrue(json.loads(request.args[0].data)["stream"])
             self.assertGreater(request.kwargs["timeout"], 65)

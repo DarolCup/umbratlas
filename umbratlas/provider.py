@@ -57,7 +57,7 @@ INTERVIEW = object_schema(questions=array_schema(STRING))
 ROADMAP = object_schema(
     title=STRING, summary=STRING, topics=array_schema(object_schema(
         id=INTEGER, prerequisites=array_schema(INTEGER), title=STRING, lesson=STRING,
-        practice=STRING, criteria=STRING, cheatsheet=STRING, recall=STRING,
+        practice=STRING, criteria=STRING, cheatsheet=STRING, recall=STRING, optional={"type": "boolean"},
     )),
 )
 ASSESSMENT = object_schema(passed={"type": "boolean"}, feedback=STRING)
@@ -337,8 +337,8 @@ class Provider:
     def interview(self, goal):
         def validate(result):
             questions = result.get("questions")
-            if not isinstance(questions, list) or not 3 <= len(questions) <= 5:
-                raise ValueError("Ожидалось от трёх до пяти вопросов.")
+            if not isinstance(questions, list) or not 1 <= len(questions) <= 17:
+                raise ValueError("Ожидалось от 1 до 17 вопросов.")
             return [clean_text(q.get("question") if isinstance(q, dict) else q, 600) for q in questions]
 
         return self.structured(
@@ -368,12 +368,12 @@ class Provider:
             return validate_roadmap(result)
 
         return self.structured(
-            "Построй долгосрочную карту из 6–10 тем от текущего уровня до цели. "
+            "Построй долгосрочную карту из 12–24 тем от текущего уровня до цели. Добавь необязательные углубления с optional=true. Обязательные темы optional=false не должны зависеть от необязательных. "
             "У каждой темы собственный числовой id, prerequisites — id строго необходимых "
             "предыдущих тем или пустой список. Разветвляй карту, если темы можно изучать параллельно. "
-            "lesson — краткий план изучения; practice — задание с конкретным результатом; "
+            "lesson — самостоятельный урок: понятное объяснение, пример и типичная ошибка (до 3500 символов); practice — задание с конкретным результатом; "
             "criteria — проверяемые признаки успеха; cheatsheet — памятка с примером; "
-            "recall — короткий вопрос без ответа. В каждом поле 1–3 предложения. "
+            "recall — короткий вопрос без ответа. В остальных полях 2–5 содержательных предложений. "
             "Ссылки будут найдены отдельно. В summary укажи ожидаемый результат и темп.",
             {"goal": goal, "interview": interview}, ROADMAP, validate, "roadmap",
         )
@@ -421,3 +421,26 @@ class Provider:
             note = "Модель исчерпала лимит ответа." if incomplete else "Модель не вернула источники веб-поиска."
             raise OutputError(f"{note} Проверь поддержку web_search или открой поиск в браузере.")
         return list(sources.values())[:6]
+
+    def return_plan(self, goal, topic, answer, days):
+        parts, incomplete = self.request(
+            "Ученик вернулся после перерыва. Сопоставь его ответ с вопросом и шпаргалкой. "
+            "Не выставляй зачёт. Дай поддерживающий конкретный план из 3 шагов: что повторить, "
+            "какое маленькое упражнение выполнить сегодня, куда идти дальше. До 200 слов.",
+            {"goal": goal, "question": topic["recall"], "reference": topic["cheatsheet"],
+             "answer": answer, "days_away": days},
+        )
+        if incomplete:
+            raise OutputError("План возвращения не завершён. Попробуй ещё раз.")
+        return clean_text("".join(part["text"] for part in parts), 6000)
+
+    def teach(self, goal, topic, question, history):
+        parts, incomplete = self.request(
+            "Ты персональный преподаватель. Ответь на вопрос ученика в контексте темы. "
+            "Дай понятную теорию, разобранный пример, типичные ошибки и небольшое упражнение. "
+            "Не придумывай ссылки. Не выдавай завершение темы без проверки практики. До 700 слов.",
+            {"goal": goal, "topic": topic, "question": question, "conversation": history},
+        )
+        if incomplete:
+            raise OutputError("Объяснение не завершено: достигнут лимит ответа.")
+        return clean_text("".join(part["text"] for part in parts), 16000)

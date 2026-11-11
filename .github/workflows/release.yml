@@ -1,0 +1,38 @@
+name: Fedora desktop release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and test dependencies
+        run: dnf install -y python3 python3-pyside6 rpm-build git gh
+      - name: Test desktop workflows
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 -m unittest discover -s tests -v
+      - name: Build source and RPM
+        run: python3 scripts/build_release.py --rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: umbratlas-linux
+          path: |
+            dist/*.rpm
+            dist/*.tar.gz
+            dist/SHA256SUMS
+      - name: Publish version if new
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          version=$(python3 -c 'from umbratlas import __version__; print(__version__)')
+          if ! gh release view "v$version" >/dev/null 2>&1; then
+            gh release create "v$version" --target "$GITHUB_SHA" --title "Umbratlas $version · Fedora KDE" --notes-file RELEASE.md dist/*.rpm dist/*.tar.gz dist/SHA256SUMS
+          fi
