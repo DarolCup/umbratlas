@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Umbratlas
+GenericName=Learning roadmap
+GenericName[ru]=Карта обучения
+Comment=Personal learning roadmaps with practice and review
+Comment[ru]=Личные карты обучения с практикой и повторением
+Exec=umbratlas
+Icon=io.github.darolcup.umbratlas
+Terminal=false
+Categories=Education;
+StartupNotify=true
