@@ -12,7 +12,7 @@ from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit,
-    QPushButton, QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from . import __version__
@@ -26,38 +26,54 @@ PROVIDERS = {"openai": "OpenAI", "ghostmodel": "GhostModel", "custom": "Друг
 PRESETS = {"openai": OPENAI_URL, "ghostmodel": GHOSTMODEL_URL}
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 STYLE = """
-QWidget { background: #121c22; color: #edf2f1; font-family: Inter, sans-serif; font-size: 14px; }
-QFrame#sidebar, QFrame#detail, QFrame#top { background: #18242b; }
-QFrame#sidebar { border-right: 1px solid #2b3b42; }
-QFrame#detail { border-left: 1px solid #2b3b42; }
-QFrame#top { border-bottom: 1px solid #2b3b42; }
+QWidget { background: #10111d; color: #eeedf7; font-family: Inter, sans-serif; font-size: 14px; }
+QFrame#sidebar { background: #151624; border-right: 1px solid #282a40; }
+QFrame#detail { background: #191b2c; border: 1px solid #30324c; border-radius: 16px; }
+QFrame#top { background: #151624; border-bottom: 1px solid #282a40; }
 QLabel, QCheckBox { background: transparent; }
-QLabel#brand { color: #b5efda; font-size: 21px; font-weight: 750; }
-QLabel#hero { font-size: 32px; font-weight: 700; }
-QLabel#heading { font-size: 24px; font-weight: 700; }
-QLabel#subheading { font-size: 17px; font-weight: 680; }
-QLabel#muted, QLabel#section { color: #a3b2b9; }
-QLabel#section { font-size: 13px; font-weight: 650; }
-QLabel#accent { color: #9ce1c3; font-weight: 650; }
+QLabel#brand { color: #e2d9ff; font-size: 22px; font-weight: 750; }
+QLabel#hero { font-size: 36px; font-weight: 750; color: #f5f1ff; }
+QLabel#heading { font-size: 26px; font-weight: 700; }
+QLabel#subheading { font-size: 18px; font-weight: 650; }
+QLabel#muted, QLabel#section { color: #a8abc5; }
+QLabel#section { font-size: 12px; font-weight: 650; }
+QLabel#accent { color: #c1adff; font-weight: 650; }
 QPushButton, QLineEdit, QPlainTextEdit, QComboBox {
-    background: #1b2a32; border: 1px solid #3a5057; border-radius: 7px; padding: 8px 12px;
+    background: #202238; border: 1px solid #393b58; border-radius: 10px; padding: 10px 14px;
 }
-QPushButton:hover { background: #294047; border-color: #709e90; }
-QPushButton:focus, QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus { border: 1px solid #9ce1c3; }
-QPushButton#accent { color: #112822; background: #9ce1c3; border-color: #9ce1c3; font-weight: 700; }
-QPushButton#accent:hover { background: #b7f2db; }
-QPushButton:disabled, QPushButton#accent:disabled { color: #869399; background: #26343a; border-color: #39484d; }
-QListWidget { background: #18242b; border: 1px solid transparent; outline: 0; }
-QListWidget::item { padding: 9px 8px; border-radius: 7px; }
-QListWidget::item:selected { color: #b5efda; background: #2b413c; }
-QListWidget::item:hover:!selected { background: #22333b; }
-QTabWidget::pane { border: 0; border-top: 1px solid #34484d; }
-QTabBar::tab { background: #18242b; color: #a3b2b9; padding: 9px 10px; }
-QTabBar::tab:selected { color: #b5efda; border-bottom: 2px solid #9ce1c3; }
-QScrollArea { border: 0; background: #18242b; }
-QWidget#tabBody { background: #18242b; }
-QStatusBar { background: #18242b; color: #a3b2b9; }
-QSplitter::handle { background: #2b3b42; }
+QPushButton { font-weight: 550; }
+QFrame#detail QPushButton { font-size: 13px; padding: 9px 8px; }
+QPushButton:hover { background: #2c2b48; border-color: #8c78bf; }
+QPushButton:pressed { background: #37304f; }
+QPushButton:focus, QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus { border: 1px solid #bda5ff; }
+QPushButton#accent {
+    color: #171225; background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #c4b0ff,stop:1 #a88aee);
+    border: 1px solid #c8b4ff; font-weight: 700;
+}
+QPushButton#accent:hover { background: #d1c0ff; }
+QPushButton#accent:pressed { background: #ad91ef; }
+QPushButton:disabled, QPushButton#accent:disabled { color: #8e91ab; background: #25273b; border-color: #34364e; }
+QListWidget { background: transparent; border: 1px solid transparent; outline: 0; }
+QListWidget::item { padding: 13px 10px; border-radius: 10px; margin: 3px 0; }
+QListWidget::item:selected { color: #e3d9ff; background: #302943; border: 1px solid #51416e; }
+QListWidget::item:hover:!selected { background: #24263b; }
+QTabWidget::pane { border: 0; border-top: 1px solid #343650; }
+QTabBar::tab { background: #191b2c; color: #a8abc5; padding: 12px 11px; }
+QTabBar::tab:selected { color: #d8c8ff; border-bottom: 2px solid #b99af9; }
+QTabBar::tab:hover { color: #eee6ff; }
+QScrollArea { border: 0; background: transparent; }
+QWidget#tabBody { background: #191b2c; }
+QStatusBar { background: #151624; color: #a8abc5; border-top: 1px solid #282a40; }
+QSplitter::handle { background: #10111d; width: 14px; }
+QScrollBar:vertical { background: transparent; width: 8px; margin: 3px; }
+QScrollBar:horizontal { background: transparent; height: 8px; margin: 3px; }
+QScrollBar::handle { background: #4c496a; border-radius: 3px; min-height: 26px; min-width: 26px; }
+QScrollBar::handle:hover { background: #8b78b7; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QProgressBar { background: #292a42; border: 0; border-radius: 3px; max-height: 6px; }
+QProgressBar::chunk { background: #b99af9; border-radius: 3px; }
+QToolTip { background: #29253e; color: #eee6ff; border: 1px solid #766091; padding: 7px; }
 """
 
 
@@ -521,7 +537,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.screen_stack)
         top = QFrame(objectName="top")
         bar = QHBoxLayout(top)
-        bar.setContentsMargins(19, 11, 20, 11)
+        bar.setContentsMargins(22, 15, 24, 15)
         logo = QLabel()
         logo.setPixmap(QIcon(str(ASSETS / "umbratlas.png")).pixmap(31, 31))
         bar.addWidget(logo)
@@ -542,9 +558,9 @@ class MainWindow(QMainWindow):
         root.addLayout(main, 1)
 
         sidebar = QFrame(objectName="sidebar")
-        sidebar.setFixedWidth(206)
+        sidebar.setFixedWidth(220)
         nav = QVBoxLayout(sidebar)
-        nav.setContentsMargins(13, 19, 13, 17)
+        nav.setContentsMargins(16, 24, 16, 20)
         nav.setSpacing(11)
         nav.addWidget(button("＋  Новая карта", self.new_map, True))
         self.resume_interview = button("К диагностике", self.open_interview)
@@ -568,9 +584,12 @@ class MainWindow(QMainWindow):
         intro.setContentsMargins(46, 24, 46, 24)
         intro.setSpacing(14)
         intro.addStretch()
-        intro.addWidget(label("Карта твоего обучения", "hero"))
+        intro.addWidget(label("ТВОЙ ЛИЧНЫЙ АТЛАС ЗНАНИЙ", "accent"))
+        intro.addWidget(label("Большая цель.\nПонятный следующий шаг.", "hero"))
         intro.addWidget(label("Опиши цель, ответь на вопросы и получи маршрут с практикой и шпаргалками.", "muted"))
-        intro.addSpacing(10)
+        intro.addSpacing(18)
+        intro.addWidget(label("01  Определи цель     ·     02  Построй маршрут     ·     03  Закрепи практикой", "muted"))
+        intro.addSpacing(18)
         intro.addWidget(button("Создать карту", self.new_map, True), alignment=Qt.AlignmentFlag.AlignLeft)
         intro.addWidget(button("Открыть пример C++", partial(self.add_sample, "cpp")), alignment=Qt.AlignmentFlag.AlignLeft)
         intro.addStretch()
@@ -579,10 +598,10 @@ class MainWindow(QMainWindow):
         workspace = QWidget()
         self.pages.addWidget(workspace)
         columns = QVBoxLayout(workspace)
-        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setContentsMargins(8, 0, 18, 16)
         columns.setSpacing(0)
         header = QVBoxLayout()
-        header.setContentsMargins(23, 18, 23, 13)
+        header.setContentsMargins(18, 24, 8, 20)
         header.setSpacing(5)
         self.map_title = label(style="heading")
         self.summary = label(style="muted")
@@ -597,6 +616,11 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.review_button)
         actions.addWidget(self.continue_button)
         header.addLayout(actions)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setAccessibleName("Прогресс маршрута")
+        header.addSpacing(10)
+        header.addWidget(self.progress_bar)
         columns.addLayout(header)
 
         splitter = QSplitter()
@@ -637,8 +661,8 @@ class MainWindow(QMainWindow):
         panel.setMinimumWidth(343)
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         details = QVBoxLayout(panel)
-        details.setContentsMargins(15, 12, 13, 8)
-        details.setSpacing(7)
+        details.setContentsMargins(18, 20, 18, 12)
+        details.setSpacing(10)
         self.topic_status = label(style="accent")
         self.topic_title = label(style="subheading")
         details.addWidget(self.topic_status)
@@ -794,6 +818,8 @@ class MainWindow(QMainWindow):
         passed = sum(bool(state["completed_at"]) for state in self.progress.values())
         due = len(pending_reviews(self.roadmap, self.progress))
         self.count.setText(f"Пройдено {passed} из {total}")
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(passed)
         self.review_button.setText(f"Повторить · {due}" if due else "Повторить")
         self.review_button.setEnabled(passed > 0)
         self.continue_button.setEnabled(passed < total)

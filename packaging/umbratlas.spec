@@ -1,5 +1,5 @@
 Name:           umbratlas
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Personal AI learning roadmaps for KDE
 License:        LicenseRef-Proprietary
@@ -39,5 +39,5 @@ install -Dm644 assets/umbratlas.png %{buildroot}%{_datadir}/icons/hicolor/256x25
 %{_datadir}/icons/hicolor/256x256/apps/io.github.darolcup.umbratlas.png
 
 %changelog
-* Wed Nov 11 2026 Umbratlas contributors - 0.3.0-1
+* Wed Nov 11 2026 Umbratlas contributors - 0.3.1-1
 - Embedded learning pages, optional topics, return sessions and Fedora packaging.

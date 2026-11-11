@@ -1,15 +1,15 @@
 """Clickable Qt scene for roadmap prerequisites."""
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QLinearGradient, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsObject, QGraphicsScene, QGraphicsView
 
 from .core import available, stages
 
-WIDTH, HEIGHT = 218, 100
-INK = "#edf2f1"
-MUTED = "#a3b2b9"
-MINT = "#9ce1c3"
+WIDTH, HEIGHT = 218, 104
+INK = "#eeedf7"
+MUTED = "#a8abc5"
+ACCENT = "#bea5ff"
 
 
 class TopicCard(QGraphicsObject):
@@ -22,26 +22,46 @@ class TopicCard(QGraphicsObject):
         self.selected = selected
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(topic["title"])
+        self.setAcceptHoverEvents(True)
+        self.hovered = False
 
     def boundingRect(self):
-        return QRectF(-2, -2, WIDTH + 4, HEIGHT + 4)
+        return QRectF(-2, -2, WIDTH + 4, HEIGHT + 8)
 
     def paint(self, painter, option, widget=None):
-        painter.setPen(QPen(QColor(MINT if self.selected else "#32444a"), 2 if self.selected else 1))
-        painter.setBrush(QColor("#233934" if self.selected else "#1b272e"))
-        painter.drawRoundedRect(QRectF(0, 0, WIDTH, HEIGHT), 12, 12)
-        painter.setPen(QColor(MINT if self.status != "Закрыта" else MUTED))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#0b0c16"))
+        painter.drawRoundedRect(QRectF(0, 4, WIDTH, HEIGHT), 15, 15)
+        gradient = QLinearGradient(0, 0, WIDTH, HEIGHT)
+        gradient.setColorAt(0, QColor("#34304f" if self.selected else "#24263d" if self.hovered else "#1d1f33"))
+        gradient.setColorAt(1, QColor("#24213a" if self.selected else "#191b2c"))
+        painter.setBrush(gradient)
+        painter.setPen(QPen(QColor(ACCENT if self.selected else "#71608f" if self.hovered else "#383a54"), 1.5))
+        painter.drawRoundedRect(QRectF(0, 0, WIDTH, HEIGHT), 15, 15)
+        color = "#91d4c3" if self.status.startswith("Пройдено") else MUTED if self.status.startswith("Закрыта") else ACCENT
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(QPointF(17, 23), 3, 3)
+        painter.setPen(QColor(color))
         painter.setFont(QFont("Inter", 9, QFont.Weight.DemiBold))
-        painter.drawText(QRectF(14, 11, WIDTH - 28, 21), Qt.AlignmentFlag.AlignLeft, self.status)
+        painter.drawText(QRectF(28, 12, WIDTH - 40, 21), Qt.AlignmentFlag.AlignLeft, self.status)
         painter.setPen(QColor(INK))
         painter.setFont(QFont("Inter", 11, QFont.Weight.DemiBold))
-        rect = QRectF(14, 37, WIDTH - 28, 53)
+        rect = QRectF(16, 43, WIDTH - 32, 53)
         flags = int(Qt.AlignmentFlag.AlignTop) | int(Qt.TextFlag.TextWordWrap)
         title = self.topic["title"]
         painter.save()
         painter.setClipRect(rect)
         painter.drawText(rect, flags, title)
         painter.restore()
+
+    def hoverEnterEvent(self, event):
+        self.hovered = True
+        self.update()
+
+    def hoverLeaveEvent(self, event):
+        self.hovered = False
+        self.update()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -58,18 +78,27 @@ class MapView(QGraphicsView):
         super().__init__()
         self.setScene(QGraphicsScene(self))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setBackgroundBrush(QColor("#121c22"))
+        self.setBackgroundBrush(QColor("#10111d"))
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
         self.cards = {}
+
+    def drawBackground(self, painter, rect):
+        painter.fillRect(rect, QColor("#10111d"))
+        painter.setPen(QPen(QColor("#292a40"), 1))
+        step = 24
+        left, top = int(rect.left()) // step * step, int(rect.top()) // step * step
+        for x in range(left, int(rect.right()) + step, step):
+            for y in range(top, int(rect.bottom()) + step, step):
+                painter.drawPoint(QPointF(x, y))
 
     def show_map(self, roadmap, progress, selected):
         scene = self.scene()
         scene.clear()
         self.cards.clear()
         for row, group in enumerate(stages(roadmap)):
-            y = 48 + row * 147
+            y = 48 + row * 150
             label = scene.addSimpleText(f"Этап {row + 1}", QFont("Inter", 9, QFont.Weight.DemiBold))
             label.setBrush(QColor(MUTED))
             label.setPos(26, y - 27)
@@ -96,7 +125,7 @@ class MapView(QGraphicsView):
                 path.moveTo(sx, sy)
                 middle = sy + min(24, (ey - sy) / 2)
                 path.cubicTo(sx, middle, ex, middle, ex, ey)
-                line = scene.addPath(path, QPen(QColor("#5b8b7e"), 1.5))
+                line = scene.addPath(path, QPen(QColor("#6e5c93"), 1.5))
                 line.setZValue(-1)
         scene.setSceneRect(scene.itemsBoundingRect().adjusted(-18, -18, 28, 30))
 
